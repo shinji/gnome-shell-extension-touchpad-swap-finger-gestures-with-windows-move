@@ -1,3 +1,4 @@
+const Main = imports.ui.main;
 const Clutter = imports.gi.Clutter;
 const Meta = imports.gi.Meta;
 const Signals = imports.signals;
@@ -13,25 +14,17 @@ const SnapAction = {
     TILE_RIGHT: 4
 };
 
+let swapGesturesHandler = null;
 let gestureHandler = null;
 
 const TouchpadGestureAction = class{
 
     constructor(actor) {
 
-        if (Clutter.DeviceManager) {
-            // Fallback for GNOME 3.32 and 3.34
-            const deviceManager = Clutter.DeviceManager.get_default();
-            this._virtualTouchpad = deviceManager.create_virtual_device(Clutter.InputDeviceType.TOUCHPAD_DEVICE);
-            this._virtualKeyboard = deviceManager.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-            this._gestureCallbackID = actor.connect('captured-event', this._handleEvent.bind(this));
-        } else {
-            // For GNOME >= 3.36
-            const seat = Clutter.get_default_backend().get_default_seat();
-            this._virtualTouchpad = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
-            this._virtualKeyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-            this._gestureCallbackID = actor.connect('captured-event::touchpad', this._handleEvent.bind(this));
-        }
+        const seat = Clutter.get_default_backend().get_default_seat();
+        this._virtualTouchpad = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+        this._virtualKeyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        this._gestureCallbackID = actor.connect('captured-event::touchpad', this._handleEvent.bind(this));
 
         this._monitorGeometry = null;
         this._posRect = new Meta.Rectangle({x:0, y:0, width: 1, height: 1});
@@ -48,7 +41,7 @@ const TouchpadGestureAction = class{
         this._unmanagedHandler = null;
         this._workspaceChangedHandler = null;
       
-        this._settings = ExtensionUtils.getSettings('org.gnome.shell.extensions.threefingerwindowmove');
+        this._settings = ExtensionUtils.getSettings('org.gnome.shell.extensions.touchpad-swap-finger-gestures-with-windows-move');
         this._settingsChangedCallbackID = this._settings.connect('changed', Lang.bind(this, this._updateSettings));
         this._updateSettings();
     }
@@ -349,13 +342,62 @@ const TouchpadGestureAction = class{
 
 };
 
+class SwapGesturesExtension {
+  constructor() {}
+
+  enable() {
+    this._swipeMods = [
+      Main.overview._swipeTracker._touchpadGesture,
+      Main.wm._workspaceAnimation._swipeTracker._touchpadGesture,
+      Main.overview._overview._controls._workspacesDisplay._swipeTracker
+        ._touchpadGesture,
+      // Main.overview._overview._controls._appDisplay._swipeTracker._touchpadGesture
+    ];
+
+    this._swipeMods.forEach((g) => {
+      g._newHandleEvent = (actor, event) => {
+        event._get_touchpad_gesture_finger_count =
+          event.get_touchpad_gesture_finger_count;
+        event.get_touchpad_gesture_finger_count = () => {
+          return event._get_touchpad_gesture_finger_count() == 4 ? 3 : 0;
+        };
+        return g._handleEvent(actor, event);
+      };
+
+      global.stage.disconnectObject(g);
+      global.stage.connectObject(
+        'captured-event::touchpad',
+        g._newHandleEvent.bind(g),
+        g
+      );
+    });
+  }
+
+  disable() {
+    this._swipeMods.forEach((g) => {
+      global.stage.disconnectObject(g);
+      global.stage.connectObject(
+        'captured-event::touchpad',
+        g._handleEvent.bind(g),
+        g
+      );
+    });
+    this._swipeMods = [];
+  }
+}
+
 Signals.addSignalMethods(TouchpadGestureAction.prototype);
 
 function enable() {
+    swapGesturesHandler = new SwapGesturesExtension();
+    swapGesturesHandler.enable();
     gestureHandler = new TouchpadGestureAction(global.stage);
 }
 
 function disable(){
     gestureHandler._cleanup();
     gestureHandler = null;
+
+    swapGesturesHandler.disable();
+    swapGesturesHandler = null;
 }

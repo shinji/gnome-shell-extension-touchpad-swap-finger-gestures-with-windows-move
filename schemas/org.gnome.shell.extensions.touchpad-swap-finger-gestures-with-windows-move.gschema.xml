@@ -2,7 +2,7 @@
   
 <schemalist gettext-domain="gnome-shell-extensions">
 
-  <schema id="org.gnome.shell.extensions.threefingerwindowmove" path="/org/gnome/shell/extensions/threefingerwindowmove/">
+  <schema id="org.gnome.shell.extensions.touchpad-swap-finger-gestures-with-windows-move" path="/org/gnome/shell/extensions/touchpad-swap-finger-gestures-with-windows-move/">
 
     <key name="acceleration" type="d">
       <default>1.2</default>

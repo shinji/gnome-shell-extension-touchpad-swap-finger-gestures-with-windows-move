@@ -1,0 +1,9 @@
+{
+	"name": "Touchpad swap finger gestures with windows move", 
+	"description": "GNOME Extension that allows change workspace with four fingers and windows move with three fingers swipe (Wayland only)", 
+	"url": "https://github.com/shinji/gnome-shell-extension-touchpad-swap-finger-gestures-with-windows-move",
+	"uuid": "touchpad-swap-finger-gestures-with-windows-move@shinji.github.com",
+	"shell-version": [
+    "43"
+  ]
+}
