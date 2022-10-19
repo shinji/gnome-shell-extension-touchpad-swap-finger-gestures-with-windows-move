@@ -1,4 +1,5 @@
 const Main = imports.ui.main;
+const GLib = imports.gi.GLib;
 const Clutter = imports.gi.Clutter;
 const Meta = imports.gi.Meta;
 const Signals = imports.signals;
@@ -19,13 +20,22 @@ let gestureHandler = null;
 
 const TouchpadGestureAction = class{
 
-    constructor(actor) {
+    constructor(stage, wm, display) {
 
         const seat = Clutter.get_default_backend().get_default_seat();
         this._virtualTouchpad = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
         this._virtualKeyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
-        this._gestureCallbackID = actor.connect('captured-event::touchpad', this._handleEvent.bind(this));
+        this._stageCapturedEventCallbackID = stage.connect('captured-event::touchpad', this._handleEvent.bind(this));
+        this._windowsManagerSizeChangedCallbackID = wm.connect('size-changed', this._onWMSizeChanged.bind(this));
+        this._displayGrabOpBeginCallbackID = display.connect('grab-op-begin', this._onBeginGrabOp.bind(this));
+        this._displayGrabOpEndCallbackID = display.connect('grab-op-end', this._onEndGrabOp.bind(this));
 
+        this._stage = stage;
+        this._wm = wm;
+        this._display = display;
+
+        this._onGesture = false;
+        this._onGrabOp = false;
         this._monitorGeometry = null;
         this._posRect = new Meta.Rectangle({x:0, y:0, width: 1, height: 1});
         this._previewRect = new Meta.Rectangle({x:0, y:0, width: 0, height: 0});
@@ -54,7 +64,6 @@ const TouchpadGestureAction = class{
     }
 
     _handleEvent(actor, event) {
-
         // Only look for touchpad swipes
         if (event.type() != Clutter.EventType.TOUCHPAD_SWIPE)
             return Clutter.EVENT_PROPAGATE;
@@ -66,6 +75,7 @@ const TouchpadGestureAction = class{
         // Handle event
         switch (event.get_gesture_phase()) {
             case Clutter.TouchpadGesturePhase.BEGIN:
+                this._onGesture = true;
                 return this._gestureStarted();
 
             case Clutter.TouchpadGesturePhase.UPDATE:
@@ -73,6 +83,7 @@ const TouchpadGestureAction = class{
                 return this._gestureUpdate(dx, dy);
 
             default: //CANCEL or END
+                this._onGesture = false;
                 return this._gestureEnd();
         }
 
@@ -80,7 +91,72 @@ const TouchpadGestureAction = class{
 
     }
 
+    _onBeginGrabOp(display, window, op) {
+
+        log(`BeginGrab: op=${op}`);
+        log(`BeginGrab: _onGrabOp=${this._onGrabOp}`);
+        log(`BeginGrab: _onGesture=${this._onGesture}`);
+        if (op == Meta.GrabOp.MOVING) {
+          this._onGrabOp = true;
+          this._gestureStarted_win();
+        }
+        const currentTime = GLib.get_monotonic_time();
+        this._virtualTouchpad.notify_button(currentTime, 1, Clutter.ButtonState.RELEASED);
+    }
+
+    _onEndGrabOp(display, window, op) {
+
+        log(`EndGrab: op=${op}`);
+        log(`EndGrab: _onGrabOp=${this._onGrabOp}`);
+        log(`EndGrab: _onGesture=${this._onGesture}`);
+        if (!this._onGesture) {
+            const currentTime = GLib.get_monotonic_time();
+            this._virtualTouchpad.notify_button(currentTime, 1, Clutter.ButtonState.RELEASED);
+            this._onGrabOp = false;
+        }
+    }
+
+    _onWMSizeChanged(display, actor) {
+        log(`VMSizeChanged`);
+    }
+
     _gestureStarted() {
+
+        const currentTime = GLib.get_monotonic_time();
+        this._virtualTouchpad.notify_button(currentTime, 1, Clutter.ButtonState.PRESSED);
+
+        return Clutter.EVENT_STOP;
+    }
+
+    _gestureUpdate(dx, dy) {
+
+        log(`gestureUpdate: dx,dy=${dx},${dy}`);
+        log(`gestureUpdate: _onGrabOp=${this._onGrabOp}`);
+        log(`gestureUpdate: _onGesture=${this._onGesture}`);
+        if (!this._onGrabOp) {
+            const currentTime = GLib.get_monotonic_time();
+            this._virtualTouchpad.notify_relative_motion(currentTime, dx, dy);
+
+            return Clutter.EVENT_STOP;
+        } else {
+            return this._gestureUpdate_win(dx, dy);
+        }
+    }
+
+    _gestureEnd() {
+
+        const currentTime = GLib.get_monotonic_time();
+        this._virtualTouchpad.notify_button(currentTime, 1, Clutter.ButtonState.RELEASED);
+
+        if (!this._onGrabOp) {
+            return Clutter.EVENT_STOP;
+        } else {
+            this._onGrabOp = false;
+            return this._gestureEnd_win();
+        }
+    }
+
+    _gestureStarted_win() {
 
         let [pointerX, pointerY, pointerZ] = global.get_pointer();
         const windowClutterActor = global.stage.get_actor_at_pos(Clutter.PickMode.REACTIVE, pointerX, pointerY).get_parent();
@@ -131,7 +207,7 @@ const TouchpadGestureAction = class{
         if (this._movingMetaWindow.get_maximized() != 0) {
 
             // Activate window
-            const currentTime = global.get_current_time();
+            const currentTime = GLib.get_monotonic_time();
             if (!this._movingMetaWindow.has_focus())
             this._movingMetaWindow.activate(currentTime);
 
@@ -169,17 +245,17 @@ const TouchpadGestureAction = class{
         return Clutter.EVENT_STOP;
     }
 
-    _gestureUpdate(dx, dy) {
+    _gestureUpdate_win(dx, dy) {
 
         // Pointer not on top of a window
         if (this._movingMetaWindow == null)
             return Clutter.EVENT_PROPAGATE;
 
         // Focus window
-        const currentTime = global.get_current_time();
+        const currentTime = GLib.get_monotonic_time();
         if (!this._movingMetaWindow.has_focus())
             this._movingMetaWindow.activate(currentTime);
-        
+
         // Apply acceleration
         dx *= this._acceleration;
         dy *= this._acceleration;
@@ -257,7 +333,7 @@ const TouchpadGestureAction = class{
         return Clutter.EVENT_STOP;
     }
 
-    _gestureEnd() {
+    _gestureEnd_win() {
 
         // Nothing to move around
         if (this._movingMetaWindow == null)
@@ -268,7 +344,7 @@ const TouchpadGestureAction = class{
             global.window_manager.emit("hide-tile-preview");
 
         // Do snap
-        const currentTime = global.get_current_time();
+        const currentTime = GLib.get_monotonic_time();
         switch (this._nextSnapAction) {
             case SnapAction.MAXIMIZE:
                 this._movingMetaWindow.maximize(Meta.MaximizeFlags.BOTH);
@@ -337,7 +413,10 @@ const TouchpadGestureAction = class{
 
     _cleanup() {
         global.stage.disconnect(this._gestureCallbackID);
-        global.stage.disconnect(this._settingsChangedCallbackID);
+        global.window_manager.disconnect(this._windowsManagerSizeChangedCallbackID);
+        global.display.disconnect(this._displayGrabOpBeginCallbackID);
+        global.display.disconnect(this._displayGrabOpEndCallbackID);
+        this._settings.disconnect(this._settingsChangedCallbackID);
     }
 
 };
@@ -391,7 +470,7 @@ Signals.addSignalMethods(TouchpadGestureAction.prototype);
 function enable() {
     swapGesturesHandler = new SwapGesturesExtension();
     swapGesturesHandler.enable();
-    gestureHandler = new TouchpadGestureAction(global.stage);
+    gestureHandler = new TouchpadGestureAction(global.stage, global.window_manager, global.display);
 }
 
 function disable(){
